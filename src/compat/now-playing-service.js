@@ -113,8 +113,9 @@ async function fetchNeteaseLyric(current) {
   const url = new URL("https://music.163.com/api/song/lyric");
   url.search = new URLSearchParams({
     id: String(current.songId),
-    lv: "1",
-    kv: "1",
+    // 网易云客户端使用 -1 请求完整歌词；lv=1/kv=1 在部分歌曲上只返回翻译。
+    lv: "-1",
+    kv: "-1",
     tv: "-1",
   });
   const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
