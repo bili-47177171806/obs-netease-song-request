@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { once } from "node:events";
-import { NowPlayingCompatServer, toCompatibleState } from "../src/compat/now-playing-service.js";
+import { NowPlayingCompatServer, toCompatibleLyric, toCompatibleState } from "../src/compat/now-playing-service.js";
 
 const current = {
   songId: "2623481920",
@@ -37,8 +37,35 @@ test("maps CDP now-playing state to Widdit query entities", () => {
   assert.deepEqual(result.progress, { progress: 43_000 });
 });
 
+test("maps NetEase lyric payload to Widdit Lyric fields", () => {
+  const lyric = toCompatibleLyric(current, {
+    lrc: { lyric: "[00:01.00]原文" },
+    tlyric: { lyric: "[00:01.00]译文" },
+    yrc: { lyric: "[00:01.00](0,500,0)原文" },
+  });
+  assert.deepEqual(lyric, {
+    source: "netease",
+    title: current.name,
+    author: "初音ミク / 25時、ナイトコードで。",
+    duration: 243,
+    hasLyric: true,
+    hasTranslatedLyric: true,
+    hasKaraokeLyric: true,
+    lrc: "[00:01.00]原文",
+    translatedLyric: "[00:01.00]译文",
+    karaokeLyric: "[00:01.00](0,500,0)原文",
+  });
+});
+
 test("serves the common Now Playing API aliases and CORS", async () => {
-  const compat = new NowPlayingCompatServer(() => ({ ...current, sampledAt: Date.now() }), { port: 0 });
+  let lyricCalls = 0;
+  const compat = new NowPlayingCompatServer(() => ({ ...current, sampledAt: Date.now() }), {
+    port: 0,
+    lyricFetcher: async () => {
+      lyricCalls += 1;
+      return toCompatibleLyric(current, { lrc: { lyric: "[00:01.00]原文" } });
+    },
+  });
   await compat.start();
   try {
     const query = await fetch(`${compat.url}/api/query`);
@@ -52,7 +79,11 @@ test("serves the common Now Playing API aliases and CORS", async () => {
     assert.equal((await (await fetch(`${compat.url}/api/query/track`)).json()).title, current.name);
     assert.equal(typeof (await (await fetch(`${compat.url}/query/progress`)).json()).progress, "number");
     assert.deepEqual(await (await fetch(`${compat.url}/api/query/hasSong`)).json(), { data: true });
-    assert.equal((await fetch(`${compat.url}/api/lyric`)).status, 404);
+    const lyric = await (await fetch(`${compat.url}/api/lyric`)).json();
+    assert.equal(lyric.hasLyric, true);
+    assert.equal(lyric.lrc, "[00:01.00]原文");
+    assert.equal((await (await fetch(`${compat.url}/lyric`)).json()).title, current.name);
+    assert.equal(lyricCalls, 1);
   } finally {
     await compat.close();
   }

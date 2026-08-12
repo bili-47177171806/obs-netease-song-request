@@ -1,6 +1,7 @@
 import http from "node:http";
 
 const MAX_COVER_BYTES = 12 * 1024 * 1024;
+const MAX_LYRIC_CACHE = 32;
 const PLAYING_STATE = 2;
 
 function clamp(value, min, max) {
@@ -29,6 +30,49 @@ function repeatType(playingMode) {
   if (playingMode === "playOneCycle") return "ONE";
   if (playingMode === "playCycle") return "ALL";
   return "NONE";
+}
+
+function emptyLyric(current = null) {
+  return {
+    source: "netease",
+    title: current?.name ? String(current.name) : "",
+    author: Array.isArray(current?.artists) ? current.artists.filter(Boolean).join(" / ") : "",
+    duration: durationSeconds(current),
+    hasLyric: false,
+    hasTranslatedLyric: false,
+    hasKaraokeLyric: false,
+    lrc: "",
+    translatedLyric: "",
+    karaokeLyric: "",
+  };
+}
+
+export function toCompatibleLyric(current, payload = null) {
+  const result = emptyLyric(current);
+  const lrc = String(payload?.lrc?.lyric || "");
+  const translatedLyric = String(payload?.tlyric?.lyric || "");
+  const karaokeLyric = String(payload?.yrc?.lyric || payload?.klyric?.lyric || "");
+  result.lrc = lrc;
+  result.translatedLyric = translatedLyric;
+  result.karaokeLyric = karaokeLyric;
+  result.hasLyric = Boolean(lrc.trim());
+  result.hasTranslatedLyric = Boolean(translatedLyric.trim());
+  result.hasKaraokeLyric = Boolean(karaokeLyric.trim());
+  return result;
+}
+
+async function fetchNeteaseLyric(current) {
+  if (!current?.songId) return emptyLyric(current);
+  const url = new URL("https://music.163.com/api/song/lyric");
+  url.search = new URLSearchParams({
+    id: String(current.songId),
+    lv: "1",
+    kv: "1",
+    tv: "-1",
+  });
+  const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+  if (!response.ok) throw new Error(`lyric request failed: HTTP ${response.status}`);
+  return toCompatibleLyric(current, await response.json());
 }
 
 export function toCompatibleState(current, now = Date.now()) {
@@ -113,10 +157,13 @@ export class NowPlayingCompatServer {
   constructor(getCurrent, {
     port = Number(process.env.NOW_PLAYING_COMPAT_PORT || 9863),
     host = process.env.NOW_PLAYING_COMPAT_HOST || "127.0.0.1",
+    lyricFetcher = fetchNeteaseLyric,
   } = {}) {
     this.getCurrent = getCurrent;
     this.port = port;
     this.host = host;
+    this.lyricFetcher = lyricFetcher;
+    this.lyricCache = new Map();
     this.server = http.createServer((req, res) => void this.#handle(req, res));
   }
 
@@ -151,6 +198,24 @@ export class NowPlayingCompatServer {
     try {
       const state = toCompatibleState(this.getCurrent?.() || null);
       if (req.method === "GET") {
+        if (["/lyric", "/api/lyric"].includes(route)) {
+          const current = this.getCurrent?.() || null;
+          const songId = current?.songId ? String(current.songId) : "";
+          if (!songId) return sendJson(res, 200, emptyLyric(current));
+          if (!this.lyricCache.has(songId)) {
+            const pending = Promise.resolve().then(() => this.lyricFetcher(current));
+            this.lyricCache.set(songId, pending);
+            pending.catch(() => this.lyricCache.delete(songId));
+            while (this.lyricCache.size > MAX_LYRIC_CACHE) {
+              this.lyricCache.delete(this.lyricCache.keys().next().value);
+            }
+          }
+          try {
+            return sendJson(res, 200, await this.lyricCache.get(songId));
+          } catch {
+            return sendJson(res, 200, emptyLyric(current));
+          }
+        }
         if (["/query", "/api/query"].includes(route)) {
           return sendJson(res, 200, { player: state.player, track: state.track });
         }
