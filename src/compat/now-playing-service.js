@@ -5,8 +5,8 @@ const MAX_COVER_BYTES = 12 * 1024 * 1024;
 const MAX_LYRIC_CACHE = 32;
 const PLAYING_STATE = 2;
 const LYRIC_WS_ROUTES = ["/api/ws/lyric", "/ws/lyric"];
-// 同一首歌进度明显回退，说明用户重播或往前拖动，歌词端需要重置自己的计时器。
-const REPLAY_BACKWARD_MS = 1_500;
+// 同一首歌进度回退超过这个幅度才算用户拖动或重播，以下都按采样噪声处理。
+const SEEK_JUMP_MS = 2_000;
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -79,10 +79,72 @@ async function fetchNeteaseLyric(current) {
   return toCompatibleLyric(current, await response.json());
 }
 
-export function toCompatibleState(current, now = Date.now()) {
+/**
+ * 网易云客户端的进度条大约每秒才刷新一次，而且对齐到时长的千分之一，
+ * 所以单次读数最多比真实播放位置滞后一秒，且滞后量每次都不同。把读数直接当作
+ * "现在的位置"推给歌词端，歌词就会在相邻两句之间来回跳。
+ *
+ * 这里改用一条只会前进的时钟：偏高的读数说明这次采样更新鲜，立即校准过去；
+ * 偏低的读数按滞后噪声忽略，由本地时钟继续走；只有明显回退才当成拖动或重播。
+ * 因为读数永远不会超过真实位置，取上包络就能逐步逼近真实位置而不会跑到前面去。
+ */
+export class ProgressClock {
+  #songId = "";
+  #baseMs = 0;
+  #anchorAt = 0;
+  #durationMs = 0;
+  #playing = false;
+  #sampledAt = 0;
+
+  /** 每检测到一次拖动或重播就加一，供推送方判断要不要发 PlayerProgressReplay。 */
+  seekCount = 0;
+
+  read(now = Date.now()) {
+    if (!this.#songId) return 0;
+    const elapsed = this.#playing ? Math.max(0, now - this.#anchorAt) : 0;
+    const limit = this.#durationMs || Number.MAX_SAFE_INTEGER;
+    return Math.round(clamp(this.#baseMs + elapsed, 0, limit));
+  }
+
+  update(current, now = Date.now()) {
+    const songId = String(current?.songId || "");
+    const playing = current?.playingState === PLAYING_STATE;
+    const sampledAt = Number(current?.sampledAt) || now;
+    const value = Math.max(0, Number(current?.currentPositionMs) || 0);
+    this.#durationMs = Math.max(0, Number(current?.durationMs) || 0);
+
+    // 切歌、暂停、恢复播放都会让旧的基准失效，直接以这次采样重新起算。
+    if (songId !== this.#songId || playing !== this.#playing) {
+      this.#songId = songId;
+      this.#playing = playing;
+      this.#anchor(value, sampledAt);
+      return;
+    }
+    // 同一次采样被多个接口读到时不重复校准，否则会被读数的滞后量反复拉回去。
+    if (!songId || sampledAt <= this.#sampledAt) return;
+    this.#sampledAt = sampledAt;
+
+    const predicted = this.read(sampledAt);
+    if (predicted - value > SEEK_JUMP_MS) {
+      this.#anchor(value, sampledAt);
+      this.seekCount += 1;
+      return;
+    }
+    if (value > predicted) this.#anchor(value, sampledAt);
+  }
+
+  #anchor(value, sampledAt) {
+    this.#baseMs = value;
+    this.#anchorAt = sampledAt;
+    this.#sampledAt = sampledAt;
+  }
+}
+
+export function toCompatibleState(current, now = Date.now(), overrideProgressMs = null) {
   const hasSong = Boolean(current?.songId);
   const duration = durationSeconds(current);
-  const progressMs = hasSong ? sampledProgressMs(current, now) : 0;
+  const sampled = overrideProgressMs ?? sampledProgressMs(current, now);
+  const progressMs = hasSong ? sampled : 0;
   const progress = Math.floor(progressMs / 1000);
   const isPaused = !hasSong || current.playingState !== PLAYING_STATE;
   const player = {
@@ -181,9 +243,11 @@ export class NowPlayingCompatServer {
     this.lyricFetcher = lyricFetcher;
     this.progressSyncMs = progressSyncMs;
     this.lyricCache = new Map();
+    this.clock = new ProgressClock();
     this.sockets = new WebSocketServer({ noServer: true });
     this.syncTimer = null;
     this.lastSnapshot = null;
+    this.lastSeekCount = 0;
     this.server = http.createServer((req, res) => void this.#handle(req, res));
     this.server.on("upgrade", (req, socket, head) => this.#upgrade(req, socket, head));
   }
@@ -216,6 +280,13 @@ export class NowPlayingCompatServer {
     await new Promise((resolve) => this.server.close(resolve));
   }
 
+  /** 所有接口共用同一条进度时钟，HTTP 与 WebSocket 读到的位置始终一致。 */
+  #snapshot(now = Date.now()) {
+    const current = this.getCurrent?.() || null;
+    this.clock.update(current, now);
+    return { current, state: toCompatibleState(current, now, this.clock.read(now)) };
+  }
+
   async #handle(req, res) {
     const route = normalizeRoute(req.url, this.url);
     if (req.method === "OPTIONS") {
@@ -224,10 +295,9 @@ export class NowPlayingCompatServer {
     }
 
     try {
-      const state = toCompatibleState(this.getCurrent?.() || null);
+      const { current, state } = this.#snapshot();
       if (req.method === "GET") {
         if (["/lyric", "/api/lyric"].includes(route)) {
-          const current = this.getCurrent?.() || null;
           if (!current?.songId) return sendJson(res, 200, emptyLyric(current));
           try {
             return sendJson(res, 200, await this.#lyricEntry(current).promise);
@@ -288,8 +358,7 @@ export class NowPlayingCompatServer {
   #openLyricSocket(client) {
     client.on("error", () => client.close());
     client.on("close", () => this.#syncSampling());
-    const current = this.getCurrent?.() || null;
-    const state = toCompatibleState(current);
+    const { current, state } = this.#snapshot();
     const lyric = current?.songId ? this.#lyricEntry(current).value : null;
     sendEvent(client, "Track", state.track);
     sendEvent(client, "Lyric", lyric || emptyLyric(current));
@@ -304,7 +373,8 @@ export class NowPlayingCompatServer {
   #syncSampling() {
     const active = this.sockets.clients.size > 0;
     if (active && !this.syncTimer) {
-      this.lastSnapshot = toCompatibleState(this.getCurrent?.() || null);
+      this.lastSnapshot = this.#snapshot().state;
+      this.lastSeekCount = this.clock.seekCount;
       this.syncTimer = setInterval(() => this.#tick(), this.progressSyncMs);
       this.syncTimer.unref?.();
     } else if (!active && this.syncTimer) {
@@ -319,10 +389,11 @@ export class NowPlayingCompatServer {
   }
 
   #tick() {
-    const current = this.getCurrent?.() || null;
-    const state = toCompatibleState(current);
+    const { current, state } = this.#snapshot();
     const previous = this.lastSnapshot;
+    const seeked = this.clock.seekCount !== this.lastSeekCount;
     this.lastSnapshot = state;
+    this.lastSeekCount = this.clock.seekCount;
     if (!previous) return;
 
     const trackChanged = previous.track.id !== state.track.id;
@@ -336,7 +407,7 @@ export class NowPlayingCompatServer {
     }
     if (trackChanged || !state.track.id) return;
 
-    if (state.progress.progress < previous.progress.progress - REPLAY_BACKWARD_MS) {
+    if (seeked) {
       // 歌词不变，只需要让对端重置进度基准。
       this.#broadcast("PlayerProgressReplay", state.progress);
     } else if (state.progress.progress !== previous.progress.progress) {
@@ -358,11 +429,11 @@ export class NowPlayingCompatServer {
         lyric = emptyLyric(current);
       }
     }
-    const latest = this.getCurrent?.() || null;
+    const { current: latest, state } = this.#snapshot();
     // 期间已经切歌，这份歌词对现在的听众没有意义。
     if (String(latest?.songId || "") !== songId) return;
     this.#broadcast("Lyric", lyric);
-    this.#broadcast("PlayerProgress", toCompatibleState(latest).progress);
+    this.#broadcast("PlayerProgress", state.progress);
   }
 
   #broadcast(event, data) {

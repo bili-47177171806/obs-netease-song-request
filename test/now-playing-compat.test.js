@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { once } from "node:events";
 import WebSocket from "ws";
-import { NowPlayingCompatServer, toCompatibleLyric, toCompatibleState } from "../src/compat/now-playing-service.js";
+import { NowPlayingCompatServer, ProgressClock, toCompatibleLyric, toCompatibleState } from "../src/compat/now-playing-service.js";
 
 const current = {
   songId: "2623481920",
@@ -128,6 +128,65 @@ test("serves the common Now Playing API aliases and CORS", async () => {
   } finally {
     await compat.close();
   }
+});
+
+test("进度时钟吸收进度条滞后噪声，读数只会前进", () => {
+  const clock = new ProgressClock();
+  const song = { songId: "1", durationMs: 240_000, playingState: 2 };
+  clock.update({ ...song, currentPositionMs: 30_000, sampledAt: 1_000 }, 1_000);
+  assert.equal(clock.read(1_000), 30_000);
+
+  // 客户端进度条这一秒还没刷新，读数原地不动；时钟按真实时间继续走。
+  clock.update({ ...song, currentPositionMs: 30_000, sampledAt: 2_000 }, 2_000);
+  assert.equal(clock.read(2_000), 31_000);
+
+  // 读数一次补了两格，说明这次采样更新鲜，立即向前校准。
+  clock.update({ ...song, currentPositionMs: 32_400, sampledAt: 3_000 }, 3_000);
+  assert.equal(clock.read(3_000), 32_400);
+
+  // 读数比本地时钟落后 600ms，属于刷新滞后，不能让歌词退回上一句。
+  clock.update({ ...song, currentPositionMs: 32_800, sampledAt: 3_400 }, 3_400);
+  assert.equal(clock.read(3_400), 32_800);
+  clock.update({ ...song, currentPositionMs: 33_000, sampledAt: 4_400 }, 4_400);
+  assert.equal(clock.read(4_400), 33_800);
+  assert.equal(clock.seekCount, 0);
+});
+
+test("进度时钟对切歌、暂停和拖动分别重新起算", () => {
+  const clock = new ProgressClock();
+  const song = { songId: "1", durationMs: 240_000, playingState: 2 };
+  clock.update({ ...song, currentPositionMs: 60_000, sampledAt: 1_000 }, 1_000);
+
+  clock.update({ ...song, songId: "2", currentPositionMs: 0, sampledAt: 2_000 }, 2_000);
+  assert.equal(clock.read(2_000), 0);
+  assert.equal(clock.seekCount, 0);
+
+  const other = { ...song, songId: "2" };
+  clock.update({ ...other, currentPositionMs: 5_000, sampledAt: 7_000 }, 7_000);
+  // 暂停后不再随真实时间前进。
+  clock.update({ ...other, playingState: 1, currentPositionMs: 5_000, sampledAt: 8_000 }, 8_000);
+  assert.equal(clock.read(20_000), 5_000);
+
+  // 拖动到别处：回退超过阈值才算真实跳转。
+  clock.update({ ...other, currentPositionMs: 120_000, sampledAt: 21_000 }, 21_000);
+  clock.update({ ...other, currentPositionMs: 10_000, sampledAt: 22_000 }, 22_000);
+  assert.equal(clock.read(22_000), 10_000);
+  assert.equal(clock.seekCount, 1);
+});
+
+test("进度时钟忽略重复读到的同一次采样", () => {
+  const clock = new ProgressClock();
+  const sample = { songId: "1", durationMs: 240_000, playingState: 2, currentPositionMs: 50_000, sampledAt: 1_000 };
+  clock.update(sample, 1_000);
+  // 多个接口在同一秒内反复读取，不能被这条读数的滞后量一次次拉回去。
+  for (const now of [1_200, 1_400, 1_600, 1_800]) clock.update(sample, now);
+  assert.equal(clock.read(1_800), 50_800);
+});
+
+test("进度时钟把读数限制在歌曲时长内", () => {
+  const clock = new ProgressClock();
+  clock.update({ songId: "1", durationMs: 10_000, playingState: 2, currentPositionMs: 9_000, sampledAt: 1_000 }, 1_000);
+  assert.equal(clock.read(30_000), 10_000);
 });
 
 test("pushes the initial lyric WebSocket events in the documented order", async () => {
