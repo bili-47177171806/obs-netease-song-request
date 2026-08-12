@@ -98,3 +98,23 @@ test("NOW PLAYING reports repeated timeouts and emits recovered", { timeout: 2_0
   assert.equal(errors.length, 1);
   assert.equal(monitor.current.songId, "1");
 });
+
+test("NOW PLAYING keeps progress moving when one CDP sample has no position", { timeout: 2_000 }, async () => {
+  const tracks = [
+    { ok: true, songId: "1", name: "One", durationMs: 60_000, currentPositionMs: 10_000, playingState: 2 },
+    { ok: true, songId: "1", name: "One", durationMs: 60_000, currentPositionMs: null, playingState: 2 },
+  ];
+  let index = 0;
+  const service = {
+    async nowPlaying() {
+      return tracks[Math.min(index++, tracks.length - 1)];
+    },
+  };
+  const monitor = new NowPlayingMonitor(service, { intervalMs: 10 });
+  monitor.start();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  monitor.stop();
+
+  assert.ok(monitor.current.currentPositionMs >= 10_000);
+  assert.ok(monitor.current.currentPositionMs < 11_000);
+});

@@ -677,15 +677,26 @@ def get_now_playing():
   const artists = track.artists || p.resourceArtists || [];
   const album = track.album || {};
   const songId = track.id || current.resourceId || p.resourceTrackId || '';
+  const durationMs = track.duration || (Number(p.resourceDuration) || 0) * 1000;
+  const durationSec = durationMs / 1000;
+  const progressInput = [...document.querySelectorAll('input[type="range"]')].find(input => {
+    const max = Number(input.max);
+    const value = Number(input.value);
+    return Number.isFinite(max) && Number.isFinite(value) && max > 0
+      && Math.abs(max - durationSec) <= Math.max(2, durationSec * 0.02)
+      && value >= 0 && value <= max + 2;
+  });
   return {
     songId: songId ? String(songId) : '',
     name: track.name || p.resourceName || '',
     artists: artists.map(x => typeof x === 'string' ? x : (x.name || '')),
     album: album.name || '',
-    durationMs: track.duration || p.resourceDuration || 0,
+    durationMs,
+    currentPositionMs: progressInput ? Math.round(Number(progressInput.value) * 1000) : null,
     coverUrl: album.picUrl || album.blurPicUrl || p.resourceCoverUrl || '',
     playingState: p.playingState,
     playingMode: p.playingMode,
+    volumePercent: Number.isFinite(Number(p.playingVolume)) ? Number(p.playingVolume) : 0,
     manualPlayingMode: window.__POINT_BOT_MANUAL_MODE__ || null,
     manualModeVersion: window.__POINT_BOT_MANUAL_MODE_VERSION__ || 0,
     resourceType: current.resourceType || p.resourceType || ''

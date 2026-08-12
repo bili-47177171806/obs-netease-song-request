@@ -4,6 +4,7 @@ import { NowPlayingMonitor } from "./bot/now-playing-monitor.js";
 import { PlaybackModeGuard } from "./bot/playback-mode-guard.js";
 import { SongQueue } from "./bot/song-queue.js";
 import { SongService } from "./cloudmusic/song-service.js";
+import { NowPlayingCompatServer } from "./compat/now-playing-service.js";
 import { CoverOutput } from "./outputs/cover-output.js";
 import { showNowPlayingToast, showSongToast } from "./outputs/toast.js";
 import { BilibiliDanmakuSource } from "./sources/bilibili-danmaku.js";
@@ -23,6 +24,8 @@ const source = danmakuSourceMode === "mock"
   : new BilibiliDanmakuSource();
 const webEnabled = process.env.WEB_UI !== "false";
 const web = webEnabled ? new WebServer(state, buildActions()) : null;
+const compatEnabled = process.env.NOW_PLAYING_COMPAT === "true";
+const compat = compatEnabled ? new NowPlayingCompatServer(() => monitor.current) : null;
 let shuttingDown = false;
 let nowPlayingRequester = "";
 
@@ -212,6 +215,7 @@ async function shutdown(exitCode = 0) {
   source.close();
   monitor.stop();
   await web?.close();
+  await compat?.close();
   await coverOutput.close();
   await queue.waitForIdle();
   service.stop();
@@ -233,6 +237,15 @@ try {
     } catch (error) {
       // 端口被占等问题不该拖垮点歌本体。
       console.error(`[前端] 启动失败：${error.message}`);
+    }
+  }
+  if (compat) {
+    try {
+      await compat.start();
+      console.log(`[兼容服务] Now Playing API ${compat.url}/api/query`);
+    } catch (error) {
+      // 兼容端口冲突不影响点歌和 OBS 页面。
+      console.error(`[兼容服务] 启动失败：${error.message}`);
     }
   }
   if (danmakuSourceMode === "mock") {

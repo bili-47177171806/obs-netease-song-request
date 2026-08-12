@@ -41,6 +41,22 @@ export class NowPlayingMonitor extends EventEmitter {
     let nextPollMs = this.intervalMs;
     try {
       const next = await this.service.nowPlaying();
+      const sampledAt = Date.now();
+      const previousSample = this.current;
+      if ((next.currentPositionMs == null || !Number.isFinite(Number(next.currentPositionMs)))
+          && previousSample?.songId === next.songId
+          && previousSample.currentPositionMs != null
+          && Number.isFinite(Number(previousSample.currentPositionMs))) {
+        const elapsed = previousSample.playingState === 2
+          ? Math.max(0, sampledAt - (Number(previousSample.sampledAt) || sampledAt))
+          : 0;
+        const duration = Number(next.durationMs) || Number.MAX_SAFE_INTEGER;
+        next.currentPositionMs = Math.min(Number(previousSample.currentPositionMs) + elapsed, duration);
+      }
+      if (next.currentPositionMs == null || !Number.isFinite(Number(next.currentPositionMs))) {
+        next.currentPositionMs = 0;
+      }
+      next.sampledAt = sampledAt;
       const recovered = this.errorReported;
       this.lastError = null;
       this.consecutiveTimeouts = 0;

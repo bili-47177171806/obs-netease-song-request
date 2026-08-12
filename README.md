@@ -16,6 +16,7 @@
 - 原尺寸封面输出、播放器圆孔裁切封面输出
 - OBS 浏览器源页面、主播管理面板、SSE 实时状态
 - B 站弹幕 WebSocket 断线自动重连
+- 可选的 Widdit Now Playing Service 只读 API 兼容服务
 
 ## 架构
 
@@ -68,6 +69,19 @@ npm start
 | 当前播放 | `http://127.0.0.1:8899/now-playing` | OBS 浏览器源 |
 | 管理面板 | `http://127.0.0.1:8899/admin` | 主播手动加歌、删歌、跳歌 |
 | 状态 JSON | `http://127.0.0.1:8899/api/state` | 调试或二次开发 |
+
+### Now Playing Service 兼容模式
+
+需要让基于 [Widdit/now-playing-service](https://github.com/Widdit/now-playing-service) API 的组件读取本项目时，启用兼容服务：
+
+```powershell
+$env:NOW_PLAYING_COMPAT = "true"
+npm start
+```
+
+服务默认监听 `http://127.0.0.1:9863`。已兼容 `/query`、`/api/query`、播放器/歌曲/进度拆分查询、`hasSong`、`isConnected` 和封面 Base64 转换接口。数据仍由本项目的网易云 CDP 后端提供，不需要启动原项目的 Java 或 C# 程序。
+
+歌词、配置管理、插件和播放控制不属于当前兼容范围；访问这些接口会返回 `404`，以免第三方程序误以为操作成功。
 
 ### 添加到 OBS
 
@@ -158,6 +172,9 @@ npm start
 | `WEB_HOST` | `127.0.0.1` | Web 监听地址，不建议改成公网地址 |
 | `WEB_PORT` | `8899` | Web 端口 |
 | `WEB_UI` | `true` | 设为 `false` 关闭网页服务 |
+| `NOW_PLAYING_COMPAT` | `false` | 设为 `true` 启动 Widdit Now Playing API 兼容服务 |
+| `NOW_PLAYING_COMPAT_HOST` | `127.0.0.1` | 兼容服务监听地址 |
+| `NOW_PLAYING_COMPAT_PORT` | `9863` | 兼容服务端口 |
 | `CLOUDMUSIC_TOAST` | `true` | Windows Toast 开关 |
 | `NOW_PLAYING_COVER_PATH` | `C:\Program Files\Now Playing\Outputs\cover.jpg` | 原尺寸封面输出 |
 | `NOW_PLAYING_COVER_CIRCLE_PATH` | `cover-circle.jpg` | 圆孔裁切封面输出 |
