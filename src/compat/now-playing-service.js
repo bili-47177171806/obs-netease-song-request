@@ -51,6 +51,49 @@ function emptyLyric(current = null) {
   };
 }
 
+function parseLrcText(text) {
+  const stamp = /\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
+  const lines = [];
+  for (const raw of String(text || "").split(/\r?\n/)) {
+    const stamps = [...raw.matchAll(stamp)];
+    if (!stamps.length) continue;
+    const content = raw.replace(stamp, "").trim();
+    if (!content) continue;
+    for (const [, minutes, seconds, fraction] of stamps) {
+      // `.5` 是半秒、`.50` 是 500ms、`.500` 也是 500ms，按小数处理三种写法都对。
+      const millis = fraction ? Number(`0.${fraction}`) * 1000 : 0;
+      lines.push({
+        time: Math.round((Number(minutes) * 60 + Number(seconds)) * 1000 + millis),
+        text: content,
+      });
+    }
+  }
+  return lines.sort((a, b) => a.time - b.time);
+}
+
+/** 把歌词文本拆成带时间的行，并按时间戳对齐翻译，供逐行显示使用。 */
+export function parseLyricLines(lyric) {
+  const main = parseLrcText(lyric?.lrc);
+  if (!main.length) return [];
+  const translated = new Map(parseLrcText(lyric?.translatedLyric).map((line) => [line.time, line.text]));
+  return main.map((line, index) => ({
+    index,
+    time: line.time,
+    text: line.text,
+    translation: translated.get(line.time) || "",
+  }));
+}
+
+/** 当前播放位置落在第几行；还没到第一行时是 -1。 */
+export function currentLineIndex(lines, progressMs) {
+  let index = -1;
+  for (const line of lines) {
+    if (line.time > progressMs) break;
+    index += 1;
+  }
+  return index;
+}
+
 export function toCompatibleLyric(current, payload = null) {
   const result = emptyLyric(current);
   const lrc = String(payload?.lrc?.lyric || "");
@@ -236,18 +279,24 @@ export class NowPlayingCompatServer {
     host = process.env.NOW_PLAYING_COMPAT_HOST || "127.0.0.1",
     lyricFetcher = fetchNeteaseLyric,
     progressSyncMs = Number(process.env.NOW_PLAYING_COMPAT_SYNC_MS || 1000),
+    lineSyncMs = Number(process.env.NOW_PLAYING_COMPAT_LINE_MS || 100),
   } = {}) {
     this.getCurrent = getCurrent;
     this.port = port;
     this.host = host;
     this.lyricFetcher = lyricFetcher;
     this.progressSyncMs = progressSyncMs;
+    // 当前行只靠本地时钟算，不额外读网易云，所以可以查得比进度推送密，
+    // 让歌词在本行开始后很短时间内就切过去。
+    this.tickMs = Math.max(20, Math.min(progressSyncMs, lineSyncMs));
     this.lyricCache = new Map();
     this.clock = new ProgressClock();
     this.sockets = new WebSocketServer({ noServer: true });
     this.syncTimer = null;
     this.lastSnapshot = null;
     this.lastSeekCount = 0;
+    this.lastLine = { songId: "", lineIndex: -1 };
+    this.lastProgressAt = 0;
     this.server = http.createServer((req, res) => void this.#handle(req, res));
     this.server.on("upgrade", (req, socket, head) => this.#upgrade(req, socket, head));
   }
@@ -305,6 +354,17 @@ export class NowPlayingCompatServer {
             return sendJson(res, 200, emptyLyric(current));
           }
         }
+        if (["/lyric/lines", "/api/lyric/lines"].includes(route)) {
+          await this.#waitForLyric(current);
+          return sendJson(res, 200, {
+            songId: current?.songId ? String(current.songId) : "",
+            lines: this.#lyricLines(current),
+          });
+        }
+        if (["/lyric/line", "/api/lyric/line"].includes(route)) {
+          await this.#waitForLyric(current);
+          return sendJson(res, 200, this.#lineState(current, state));
+        }
         if (["/query", "/api/query"].includes(route)) {
           return sendJson(res, 200, { player: state.player, track: state.track });
         }
@@ -346,6 +406,46 @@ export class NowPlayingCompatServer {
     return entry;
   }
 
+  /** 首次请求逐行歌词时等一次网络，之后都走缓存。 */
+  async #waitForLyric(current) {
+    if (!current?.songId) return;
+    try {
+      await this.#lyricEntry(current).promise;
+    } catch {
+      // 取不到歌词就按没有歌词处理，接口仍返回结构完整的空结果。
+    }
+  }
+
+  /** 已缓存歌词的解析结果；还没取回来时是空数组。解析只做一次。 */
+  #lyricLines(current) {
+    const entry = current?.songId ? this.lyricCache.get(String(current.songId)) : null;
+    if (!entry?.value) return [];
+    entry.lines ??= parseLyricLines(entry.value);
+    return entry.lines;
+  }
+
+  #lineState(current, state) {
+    const lines = this.#lyricLines(current);
+    const progress = state.progress.progress;
+    const index = currentLineIndex(lines, progress);
+    const at = (position) => (position >= 0 && position < lines.length ? lines[position] : null);
+    return {
+      songId: current?.songId ? String(current.songId) : "",
+      progress,
+      lineCount: lines.length,
+      lineIndex: index,
+      line: at(index),
+      next: at(index + 1),
+    };
+  }
+
+  #pushLine(current, state) {
+    const line = this.#lineState(current, state);
+    if (line.songId === this.lastLine.songId && line.lineIndex === this.lastLine.lineIndex) return;
+    this.lastLine = { songId: line.songId, lineIndex: line.lineIndex };
+    this.#broadcast("LyricLine", line);
+  }
+
   #upgrade(req, socket, head) {
     if (!LYRIC_WS_ROUTES.includes(normalizeRoute(req.url, this.url))) {
       socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
@@ -364,6 +464,10 @@ export class NowPlayingCompatServer {
     sendEvent(client, "Lyric", lyric || emptyLyric(current));
     sendEvent(client, "PlayerPauseState", state.player);
     sendEvent(client, "PlayerProgress", state.progress);
+    // 本项目的扩展事件，放在原协议四条之后，第三方程序会忽略不认识的事件。
+    const line = this.#lineState(current, state);
+    sendEvent(client, "LyricLine", line);
+    this.lastLine = { songId: line.songId, lineIndex: line.lineIndex };
     // 歌词还没取回来时先给空结构，取回后再补一条 Lyric，避免阻塞其余三条初始消息。
     if (current?.songId && !lyric) void this.#refreshLyric(current);
     this.#syncSampling();
@@ -375,7 +479,7 @@ export class NowPlayingCompatServer {
     if (active && !this.syncTimer) {
       this.lastSnapshot = this.#snapshot().state;
       this.lastSeekCount = this.clock.seekCount;
-      this.syncTimer = setInterval(() => this.#tick(), this.progressSyncMs);
+      this.syncTimer = setInterval(() => this.#tick(), this.tickMs);
       this.syncTimer.unref?.();
     } else if (!active && this.syncTimer) {
       this.#stopSampling();
@@ -389,7 +493,8 @@ export class NowPlayingCompatServer {
   }
 
   #tick() {
-    const { current, state } = this.#snapshot();
+    const now = Date.now();
+    const { current, state } = this.#snapshot(now);
     const previous = this.lastSnapshot;
     const seeked = this.clock.seekCount !== this.lastSeekCount;
     this.lastSnapshot = state;
@@ -399,21 +504,30 @@ export class NowPlayingCompatServer {
     const trackChanged = previous.track.id !== state.track.id;
     if (trackChanged) {
       this.#broadcast("Track", state.track);
-      this.#broadcast("PlayerProgress", state.progress);
+      this.#pushProgress(state, now);
       void this.#refreshLyric(current);
     }
     if (previous.player.isPaused !== state.player.isPaused) {
       this.#broadcast("PlayerPauseState", state.player);
     }
-    if (trackChanged || !state.track.id) return;
-
-    if (seeked) {
-      // 歌词不变，只需要让对端重置进度基准。
-      this.#broadcast("PlayerProgressReplay", state.progress);
-    } else if (state.progress.progress !== previous.progress.progress) {
-      // 暂停时进度不动，没必要每秒重复推同一个值，对端自己走本地计时器。
-      this.#broadcast("PlayerProgress", state.progress);
+    if (!trackChanged && state.track.id) {
+      if (seeked) {
+        // 歌词不变，只需要让对端重置进度基准。
+        this.#broadcast("PlayerProgressReplay", state.progress);
+        this.lastProgressAt = now;
+      } else if (state.progress.progress !== previous.progress.progress
+          && now - this.lastProgressAt >= this.progressSyncMs) {
+        // 进度按原项目的节奏每秒同步一次即可，对端自己走本地计时器；
+        // 暂停时进度不动，这里也就不会重复推同一个值。
+        this.#pushProgress(state, now);
+      }
     }
+    this.#pushLine(current, state);
+  }
+
+  #pushProgress(state, now = Date.now()) {
+    this.lastProgressAt = now;
+    this.#broadcast("PlayerProgress", state.progress);
   }
 
   /** 歌词就绪后推送，顺序与原项目的 LyricChangedEvent 相同。 */
@@ -433,7 +547,9 @@ export class NowPlayingCompatServer {
     // 期间已经切歌，这份歌词对现在的听众没有意义。
     if (String(latest?.songId || "") !== songId) return;
     this.#broadcast("Lyric", lyric);
-    this.#broadcast("PlayerProgress", state.progress);
+    this.#pushProgress(state);
+    // 歌词刚到手，逐行状态这时才第一次算得出来。
+    this.#pushLine(latest, state);
   }
 
   #broadcast(event, data) {

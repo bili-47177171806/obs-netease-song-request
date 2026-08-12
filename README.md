@@ -79,7 +79,7 @@ $env:NOW_PLAYING_COMPAT = "true"
 npm start
 ```
 
-服务默认监听 `http://127.0.0.1:9863`。已兼容 `/query`、`/api/query`、播放器/歌曲/进度拆分查询、`hasSong`、`isConnected`、`/api/lyric` 歌词查询和封面 Base64 转换接口。歌词通过当前网易云歌曲 ID 获取，并缓存到切歌为止；原文、翻译和逐字歌词字段都会按网易云返回内容填充。
+服务默认监听 `http://127.0.0.1:9863`。已兼容 `/query`、`/api/query`、播放器/歌曲/进度拆分查询、`hasSong`、`isConnected`、`/api/lyric` 歌词查询和封面 Base64 转换接口；另外扩展了逐行歌词接口，见下文。歌词通过当前网易云歌曲 ID 获取，并缓存到切歌为止；原文、翻译和逐字歌词字段都会按网易云返回内容填充。
 
 配置管理、插件和播放控制不属于当前兼容范围；访问这些接口会返回 `404`，以免第三方程序误以为操作成功。歌曲没有歌词或网易云请求失败时，`/api/lyric` 仍返回完整的空歌词结构。
 
@@ -98,10 +98,47 @@ ws://127.0.0.1:9863/api/ws/lyric
 | `PlayerPauseState` | 播放、暂停状态改变 | 同 `/api/query/player` |
 | `PlayerProgress` | 每秒同步一次，切歌与歌词更新时补发 | 同 `/api/query/progress` |
 | `PlayerProgressReplay` | 同一首歌进度明显回退，如重播或往前拖动 | 同 `/api/query/progress` |
+| `LyricLine` | 唱到的歌词行发生变化（本项目扩展） | 同 `/api/lyric/line` |
 
 连接建立时若歌词还没取回来，`Lyric` 会先给完整的空结构，取到后再补一条。没有任何客户端连接时不会轮询网易云，推送间隔可用 `NOW_PLAYING_COMPAT_SYNC_MS` 调整。
 
 网易云客户端的进度条大约每秒才刷新一次，而且对齐到歌曲时长的千分之一，单次读数最多比真实位置滞后一秒。因此 `PlayerProgress` 推送的不是原始读数，而是一条只会前进的时钟：读数偏高时立即向前校准，偏低时按滞后噪声忽略。滚动歌词因此不会在相邻两句之间来回跳；只有真正拖动进度或重播时才会收到 `PlayerProgressReplay`。
+
+### 逐行歌词接口
+
+`Lyric` 事件给的是原始 LRC 文本，自己解析时间轴比较麻烦。想直接按行显示可以用下面两个接口，它们不属于原项目协议，是本项目的扩展：
+
+```text
+GET http://127.0.0.1:9863/api/lyric/lines
+GET http://127.0.0.1:9863/api/lyric/line
+```
+
+`/api/lyric/lines` 返回当前歌曲解析好的全部行，翻译按时间戳对齐，每首歌只解析一次：
+
+```json
+{
+  "songId": "493454214",
+  "lines": [
+    { "index": 2, "time": 1820, "text": "夜ノ匂イ", "translation": "夜的气息" },
+    { "index": 3, "time": 2900, "text": "車ノ音", "translation": "汽车鸣声" }
+  ]
+}
+```
+
+`/api/lyric/line` 返回当前唱到哪一行，`lineIndex` 为 `-1` 表示还在前奏：
+
+```json
+{
+  "songId": "493454214",
+  "progress": 85416,
+  "lineCount": 101,
+  "lineIndex": 37,
+  "line": { "index": 37, "time": 85320, "text": "一人当て無く漂っていくの", "translation": "一个人漫无目的地飘荡" },
+  "next": { "index": 38, "time": 87400, "text": "形骸的殘響に絆され滅びゆく都市を", "translation": "" }
+}
+```
+
+同样的内容会在换行时通过 `LyricLine` 事件推送，不必轮询。行号由上面那条进度时钟本地算出，不额外读网易云，所以检查频率比进度推送高得多——实测换行后约 `25~100ms` 内就会推送，而 `PlayerProgress` 仍保持每秒一条。检查间隔可用 `NOW_PLAYING_COMPAT_LINE_MS` 调整。
 
 ### 添加到 OBS
 
@@ -196,6 +233,7 @@ npm start
 | `NOW_PLAYING_COMPAT_HOST` | `127.0.0.1` | 兼容服务监听地址 |
 | `NOW_PLAYING_COMPAT_PORT` | `9863` | 兼容服务端口 |
 | `NOW_PLAYING_COMPAT_SYNC_MS` | `1000` | 歌词 WebSocket 的进度推送间隔（毫秒） |
+| `NOW_PLAYING_COMPAT_LINE_MS` | `100` | 歌词当前行的检查间隔（毫秒），只做本地计算 |
 | `CLOUDMUSIC_TOAST` | `true` | Windows Toast 开关 |
 | `NOW_PLAYING_COVER_PATH` | `C:\Program Files\Now Playing\Outputs\cover.jpg` | 原尺寸封面输出 |
 | `NOW_PLAYING_COVER_CIRCLE_PATH` | `cover-circle.jpg` | 圆孔裁切封面输出 |

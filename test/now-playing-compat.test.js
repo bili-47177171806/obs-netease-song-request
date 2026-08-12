@@ -3,7 +3,14 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { once } from "node:events";
 import WebSocket from "ws";
-import { NowPlayingCompatServer, ProgressClock, toCompatibleLyric, toCompatibleState } from "../src/compat/now-playing-service.js";
+import {
+  NowPlayingCompatServer,
+  ProgressClock,
+  currentLineIndex,
+  parseLyricLines,
+  toCompatibleLyric,
+  toCompatibleState,
+} from "../src/compat/now-playing-service.js";
 
 const current = {
   songId: "2623481920",
@@ -187,6 +194,99 @@ test("进度时钟把读数限制在歌曲时长内", () => {
   const clock = new ProgressClock();
   clock.update({ songId: "1", durationMs: 10_000, playingState: 2, currentPositionMs: 9_000, sampledAt: 1_000 }, 1_000);
   assert.equal(clock.read(30_000), 10_000);
+});
+
+const lyricWithLines = toCompatibleLyric(current, {
+  lrc: {
+    lyric: [
+      "[00:00.000]作词: 須田景凪",
+      "[00:21.400]途方もない時間だけ",
+      "[00:24.78]また過ぎていく",
+      "[01:07.5]呆れる程に傍にいて",
+      "[00:10.000]",
+    ].join("\n"),
+  },
+  tlyric: { lyric: "[00:21.400]只有漫无边际的时间\n[00:24.78]又流逝而过" },
+});
+
+test("按时间戳解析逐行歌词并对齐翻译", () => {
+  const lines = parseLyricLines(lyricWithLines);
+  assert.deepEqual(lines, [
+    { index: 0, time: 0, text: "作词: 須田景凪", translation: "" },
+    { index: 1, time: 21_400, text: "途方もない時間だけ", translation: "只有漫无边际的时间" },
+    { index: 2, time: 24_780, text: "また過ぎていく", translation: "又流逝而过" },
+    { index: 3, time: 67_500, text: "呆れる程に傍にいて", translation: "" },
+  ]);
+});
+
+test("没有歌词时逐行解析返回空数组", () => {
+  assert.deepEqual(parseLyricLines(toCompatibleLyric(current, null)), []);
+  assert.deepEqual(parseLyricLines(null), []);
+});
+
+test("按播放位置定位当前行", () => {
+  const lines = parseLyricLines(lyricWithLines);
+  assert.equal(currentLineIndex(lines, -1), -1);
+  assert.equal(currentLineIndex(lines, 0), 0);
+  assert.equal(currentLineIndex(lines, 21_399), 0);
+  assert.equal(currentLineIndex(lines, 21_400), 1);
+  assert.equal(currentLineIndex(lines, 30_000), 2);
+  assert.equal(currentLineIndex(lines, 999_999), 3);
+  assert.equal(currentLineIndex([], 5_000), -1);
+});
+
+test("逐行歌词接口返回全部行和当前行", async () => {
+  const compat = new NowPlayingCompatServer(() => ({ ...current, currentPositionMs: 24_900, sampledAt: Date.now() }), {
+    port: 0,
+    lyricFetcher: async () => lyricWithLines,
+  });
+  await compat.start();
+  try {
+    const all = await (await fetch(`${compat.url}/api/lyric/lines`)).json();
+    assert.equal(all.songId, current.songId);
+    assert.equal(all.lines.length, 4);
+    assert.equal(all.lines[1].translation, "只有漫无边际的时间");
+
+    const line = await (await fetch(`${compat.url}/lyric/line`)).json();
+    assert.equal(line.lineCount, 4);
+    assert.equal(line.lineIndex, 2);
+    assert.equal(line.line.text, "また過ぎていく");
+    assert.equal(line.next.text, "呆れる程に傍にいて");
+    assert.equal(typeof line.progress, "number");
+  } finally {
+    await compat.close();
+  }
+});
+
+test("当前行变化时通过 WebSocket 推送 LyricLine", async () => {
+  const live = { ...current, currentPositionMs: 0, sampledAt: Date.now() };
+  const compat = new NowPlayingCompatServer(() => live, {
+    port: 0,
+    progressSyncMs: 20,
+    lyricFetcher: async () => lyricWithLines,
+  });
+  await compat.start();
+  const client = new WebSocket(compat.lyricSocketUrl);
+  const feed = collect(client);
+  try {
+    await once(client, "open");
+    // 初始那条排在原协议四条之后，且此时歌词还没解析出来。
+    assert.equal(feed.events()[4], "LyricLine");
+    assert.equal(feed.messages[4].data.lineIndex, -1);
+
+    // 歌词取回后第一次算出行号：位置 0 命中第 0 行。
+    assert.equal((await feed.waitFor("LyricLine", 2)).data.line.text, "作词: 須田景凪");
+
+    Object.assign(live, { currentPositionMs: 24_800, sampledAt: Date.now() });
+    const moved = await feed.waitFor("LyricLine", 3);
+    assert.equal(moved.data.lineIndex, 2);
+    assert.equal(moved.data.line.text, "また過ぎていく");
+    assert.equal(moved.data.line.translation, "又流逝而过");
+    assert.equal(moved.data.next.text, "呆れる程に傍にいて");
+  } finally {
+    client.close();
+    await compat.close();
+  }
 });
 
 test("pushes the initial lyric WebSocket events in the documented order", async () => {
