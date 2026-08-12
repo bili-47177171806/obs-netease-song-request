@@ -83,6 +83,24 @@ npm start
 
 配置管理、插件和播放控制不属于当前兼容范围；访问这些接口会返回 `404`，以免第三方程序误以为操作成功。歌曲没有歌词或网易云请求失败时，`/api/lyric` 仍返回完整的空歌词结构。
 
+原项目的歌词推送 WebSocket 也一并兼容，滚动歌词类组件不必轮询：
+
+```text
+ws://127.0.0.1:9863/api/ws/lyric
+```
+
+连接后无需鉴权或订阅，服务端立即按 `Track`、`Lyric`、`PlayerPauseState`、`PlayerProgress` 的顺序推送当前状态，之后按变化持续推送。客户端发来的消息会被忽略。消息统一为 `{ "event": ..., "data": ... }`：
+
+| 事件 | 触发时机 | `data` |
+|---|---|---|
+| `Track` | 切歌 | 同 `/api/query/track` |
+| `Lyric` | 歌词就绪或切歌后重新取到歌词 | 同 `/api/lyric` |
+| `PlayerPauseState` | 播放、暂停状态改变 | 同 `/api/query/player` |
+| `PlayerProgress` | 每秒同步一次，切歌与歌词更新时补发 | 同 `/api/query/progress` |
+| `PlayerProgressReplay` | 同一首歌进度明显回退，如重播或往前拖动 | 同 `/api/query/progress` |
+
+连接建立时若歌词还没取回来，`Lyric` 会先给完整的空结构，取到后再补一条。没有任何客户端连接时不会轮询网易云，推送间隔可用 `NOW_PLAYING_COMPAT_SYNC_MS` 调整。
+
 ### 添加到 OBS
 
 1. 打开 OBS，添加“浏览器”源。
@@ -175,6 +193,7 @@ npm start
 | `NOW_PLAYING_COMPAT` | `false` | 设为 `true` 启动 Widdit Now Playing API 兼容服务 |
 | `NOW_PLAYING_COMPAT_HOST` | `127.0.0.1` | 兼容服务监听地址 |
 | `NOW_PLAYING_COMPAT_PORT` | `9863` | 兼容服务端口 |
+| `NOW_PLAYING_COMPAT_SYNC_MS` | `1000` | 歌词 WebSocket 的进度推送间隔（毫秒） |
 | `CLOUDMUSIC_TOAST` | `true` | Windows Toast 开关 |
 | `NOW_PLAYING_COVER_PATH` | `C:\Program Files\Now Playing\Outputs\cover.jpg` | 原尺寸封面输出 |
 | `NOW_PLAYING_COVER_CIRCLE_PATH` | `cover-circle.jpg` | 圆孔裁切封面输出 |

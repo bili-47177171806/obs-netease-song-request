@@ -242,7 +242,7 @@ try {
   if (compat) {
     try {
       await compat.start();
-      console.log(`[兼容服务] Now Playing API ${compat.url}/api/query`);
+      console.log(`[兼容服务] Now Playing API ${compat.url}/api/query ｜ 歌词推送 ${compat.lyricSocketUrl}`);
     } catch (error) {
       // 兼容端口冲突不影响点歌和 OBS 页面。
       console.error(`[兼容服务] 启动失败：${error.message}`);
