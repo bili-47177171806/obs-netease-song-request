@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>当前播放</title>
+<style>
+  /* 这一页之后要贴合播放器 UI，所有可调项都放在这里，改这一块就够。 */
+  :root {
+    --accent: #ff7bb0;
+    --text: #ffffff;
+    --sub: rgba(255, 255, 255, .75);
+    --scale: 1;
+    --gap: 14px;
+    --cover: 96px;
+    --artist-gap: .25em;
+    --artist-max-width: 100%;
+    --radius: 12px;
+    --align: left;
+    --font: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    --shadow: 0 1px 3px rgba(0, 0, 0, .55);
+  }
+
+  html, body {
+    margin: 0;
+    background: transparent;
+    overflow: hidden;
+    font-family: var(--font);
+    color: var(--text);
+  }
+
+  #root {
+    display: flex;
+    align-items: center;
+    gap: var(--gap);
+    padding: 12px;
+    font-size: calc(16px * var(--scale));
+    text-shadow: var(--shadow);
+  }
+
+  #cover {
+    width: var(--cover);
+    height: var(--cover);
+    border-radius: var(--radius);
+    object-fit: cover;
+    flex-shrink: 0;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, .35);
+  }
+
+  #cover[hidden] { display: none; }
+
+  #meta { min-width: 0; flex: 1; text-align: var(--align); }
+
+  #name {
+    font-size: 1.5em;
+    font-weight: 700;
+    line-height: 1.25;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #artists {
+    margin-top: var(--artist-gap);
+    max-width: var(--artist-max-width);
+    font-size: .95em;
+    color: var(--sub);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #root[data-align="center"] #artists { margin-inline: auto; }
+  #root[data-align="right"] #artists { margin-left: auto; }
+
+  #requester {
+    margin-top: .35em;
+    font-size: .8em;
+    color: var(--accent);
+  }
+
+  #requester[hidden] { display: none; }
+
+  /* 歌名过长时滚动，OBS 里定宽也不会截断信息。 */
+  .marquee > span {
+    display: inline-block;
+    padding-right: 2em;
+    animation: slide 12s linear infinite;
+  }
+
+  @keyframes slide {
+    from { transform: translateX(0); }
+    to { transform: translateX(-50%); }
+  }
+
+  #root.idle { opacity: .5; }
+</style>
+</head>
+<body>
+<div id="root">
+  <img id="cover" alt="" hidden>
+  <div id="meta">
+    <div id="name">等待播放…</div>
+    <div id="artists"></div>
+    <div id="requester" hidden></div>
+  </div>
+</div>
+
+<script>
+  const params = new URLSearchParams(location.search);
+
+  function applyParams() {
+    const map = {
+      accent: "--accent", text: "--text", sub: "--sub", scale: "--scale",
+      gap: "--gap", cover: "--cover", radius: "--radius", align: "--align",
+      artistGap: "--artist-gap", artistMaxWidth: "--artist-max-width",
+      font: "--font", shadow: "--shadow",
+    };
+    for (const [key, prop] of Object.entries(map)) {
+      const value = params.get(key);
+      if (value) document.documentElement.style.setProperty(prop, value);
+    }
+    const alignment = params.get("align") || "left";
+    if (["left", "center", "right"].includes(alignment)) root.dataset.align = alignment;
+  }
+
+  const showCover = params.get("cover") !== "0";
+  const showRequester = params.get("requester") !== "0";
+  const separator = params.get("sep") || " / ";
+  const root = document.getElementById("root");
+  const cover = document.getElementById("cover");
+  const name = document.getElementById("name");
+  const artists = document.getElementById("artists");
+  const requester = document.getElementById("requester");
+  cover.onerror = () => {
+    cover.hidden = true;
+    cover.removeAttribute("src");
+  };
+
+  function render(state) {
+    const current = state.nowPlaying;
+    root.classList.toggle("idle", !current || !current.songId);
+    if (!current || !current.songId) {
+      name.textContent = params.get("idle") || "等待播放…";
+      artists.textContent = "";
+      cover.hidden = true;
+      requester.hidden = true;
+      return;
+    }
+
+    name.textContent = current.name || current.songId;
+    artists.textContent = (current.artists || []).join(separator);
+
+    if (showCover && current.coverUrl) {
+      cover.src = current.coverUrl;
+      cover.hidden = false;
+    } else {
+      cover.hidden = true;
+      cover.removeAttribute("src");
+    }
+
+    if (showRequester && current.requester) {
+      requester.textContent = `${current.requester} 点的`;
+      requester.hidden = false;
+    } else {
+      requester.hidden = true;
+    }
+  }
+
+  applyParams();
+
+  let source;
+  function connect() {
+    source = new EventSource("/api/events");
+    source.onmessage = (event) => render(JSON.parse(event.data));
+    source.onerror = () => {
+      source.close();
+      setTimeout(connect, 2000);
+    };
+  }
+  connect();
+</script>
+</body>
+</html>

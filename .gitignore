@@ -1,0 +1,14 @@
+node_modules/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+cover.jpg
+cover-circle.jpg
+debug.log
+*.log
+backend/cloudmusic/research/*.png
+backend/cloudmusic/research/*.jpg
+backend/cloudmusic/research/*.jpeg
+.env
+.env.*
+!.env.example

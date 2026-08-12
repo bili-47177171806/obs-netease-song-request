@@ -1,0 +1,23 @@
+{
+  "name": "obs-netease-song-request",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "B 站弹幕点歌姬：控制网易云音乐 PC 客户端，并为 OBS 提供点歌与当前播放界面",
+  "scripts": {
+    "start": "node src/index.js",
+    "backend": "python -m backend.cloudmusic.server",
+    "inject": "python -m backend.cloudmusic.engine",
+    "test": "node --test && python -m unittest discover -s test -p \"test_*.py\""
+  },
+  "dependencies": {
+    "node-notifier": "^10.0.1",
+    "sharp": "^0.35.3",
+    "ws": "^8.21.3"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

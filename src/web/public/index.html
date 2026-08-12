@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>点歌姬前端</title>
+<style>
+  :root { --accent: #ff7bb0; --bg: #16151a; --card: #1f1e25; --line: #302e39; --text: #f2f0f5; --sub: #9b98a8; }
+  body { margin: 0; padding: 24px; background: var(--bg); color: var(--text);
+         font: 14px/1.6 "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.lead { color: var(--sub); margin: 0 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+          padding: 14px 16px; margin-bottom: 12px; max-width: 720px; }
+  .card h2 { font-size: 15px; margin: 0 0 4px; }
+  .card p { color: var(--sub); margin: 0 0 10px; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  code { background: #131218; border: 1px solid var(--line); border-radius: 6px;
+         padding: 6px 9px; flex: 1; overflow-x: auto; white-space: nowrap; font-family: Consolas, monospace;
+         scrollbar-width: thin; scrollbar-color: #505563 transparent; }
+  code::-webkit-scrollbar { height: 6px; }
+  code::-webkit-scrollbar-track { background: transparent; }
+  code::-webkit-scrollbar-thumb { background: #505563; border-radius: 3px; }
+  code::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+  button, a.btn { background: #2a2833; border: 1px solid var(--line); color: var(--text);
+                  border-radius: 7px; padding: 6px 12px; font: inherit; cursor: pointer;
+                  text-decoration: none; white-space: nowrap; }
+  button:hover, a.btn:hover { border-color: var(--accent); }
+  .tip { color: var(--sub); font-size: 12px; margin-top: 8px; }
+  .tip code { white-space: normal; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<h1>点歌姬前端</h1>
+<p class="lead">三个页面都在这台机器上，直接把地址粘到 OBS 里。</p>
+
+<div class="card">
+  <h2>点歌面板 · 浏览器源</h2>
+  <p>玩法说明 + 当前点歌列表，透明背景，建议 480×540。</p>
+  <div class="row"><code id="u-panel"></code><button data-copy="u-panel">复制</button><a class="btn" href="/panel" target="_blank">预览</a></div>
+  <div class="tip">可加参数：<code style="display:inline;padding:2px 5px">?limit=8&amp;rules=0&amp;scale=1.2&amp;accent=%23ff7bb0</code></div>
+</div>
+
+<div class="card">
+  <h2>当前播放 · 浏览器源</h2>
+  <p>歌名和歌手，透明背景，建议 600×140。之后按播放器 UI 细调这一页。</p>
+  <div class="row"><code id="u-now"></code><button data-copy="u-now">复制</button><a class="btn" href="/now-playing" target="_blank">预览</a></div>
+  <div class="tip">可加参数：<code style="display:inline;padding:2px 5px">?cover=0&amp;align=center&amp;artistGap=8px&amp;artistMaxWidth=320px</code></div>
+</div>
+
+<div class="card">
+  <h2>管理面板 · 自定义浏览器停靠窗口</h2>
+  <p>OBS 菜单 → 停靠窗口 → 自定义浏览器停靠窗口，粘贴这个地址。</p>
+  <div class="row"><code id="u-admin"></code><button data-copy="u-admin">复制</button><a class="btn" href="/admin" target="_blank">打开</a></div>
+</div>
+
+<script>
+  const base = location.origin;
+  document.getElementById("u-panel").textContent = `${base}/panel`;
+  document.getElementById("u-now").textContent = `${base}/now-playing`;
+  document.getElementById("u-admin").textContent = `${base}/admin`;
+  document.querySelectorAll("[data-copy]").forEach((button) => {
+    button.onclick = async () => {
+      await navigator.clipboard.writeText(document.getElementById(button.dataset.copy).textContent);
+      const original = button.textContent;
+      button.textContent = "已复制";
+      setTimeout(() => (button.textContent = original), 1200);
+    };
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>点歌姬管理面板</title>
+<style>
+  :root {
+    --accent: #fb7299;
+    --bg: #1d1f26;
+    --card: #272a33;
+    --control: #3c404d;
+    --line: #3c404d;
+    --text: #e8eaf0;
+    --sub: #a8adb9;
+    --ok: #52c89a;
+    --bad: #ff7185;
+  }
+
+  * { box-sizing: border-box; }
+
+  html {
+    scrollbar-width: thin;
+    scrollbar-color: #505563 var(--bg);
+    scrollbar-gutter: stable;
+  }
+
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar {
+    width: 7px;
+  }
+
+  html::-webkit-scrollbar-track,
+  body::-webkit-scrollbar-track {
+    background: var(--bg);
+  }
+
+  html::-webkit-scrollbar-thumb,
+  body::-webkit-scrollbar-thumb {
+    background: #505563;
+    border: 1px solid var(--bg);
+    border-radius: 4px;
+  }
+
+  html::-webkit-scrollbar-thumb:hover,
+  body::-webkit-scrollbar-thumb:hover {
+    background: var(--accent);
+  }
+
+  body {
+    margin: 0;
+    padding: 7px;
+    background: var(--bg);
+    color: var(--text);
+    color-scheme: dark;
+    font: 13px/1.45 "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    padding: 10px;
+    margin-bottom: 7px;
+  }
+
+  .card:last-of-type { margin-bottom: 0; }
+
+  h2 {
+    margin: 0 0 8px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0;
+    color: var(--text);
+  }
+
+  .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .grow { flex: 1; min-width: 0; }
+
+  input[type=text], select {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    color: var(--text);
+    border-radius: 3px;
+    padding: 6px 8px;
+    font: inherit;
+    min-width: 0;
+  }
+
+  input[type=text]::placeholder { color: #737985; }
+  input[type=text]:focus, select:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+
+  button {
+    background: var(--control);
+    border: 1px solid var(--line);
+    color: var(--text);
+    border-radius: 3px;
+    padding: 6px 10px;
+    font: inherit;
+    cursor: pointer;
+  }
+
+  button:hover:not(:disabled) { border-color: var(--accent); background: #474c59; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.danger:hover:not(:disabled) { border-color: var(--bad); color: var(--bad); }
+  button.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.mini { padding: 4px 8px; font-size: 12px; }
+  button.mini svg { width: 14px; height: 14px; vertical-align: -2px; margin-right: 3px; }
+
+  .now { display: flex; gap: 10px; align-items: center; }
+  .now img { width: 52px; height: 52px; border: 1px solid var(--line); border-radius: 3px; object-fit: cover; background: var(--bg); }
+  .now .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .now .sub { color: var(--sub); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .dots { display: flex; gap: 10px; font-size: 12px; color: var(--sub); margin-top: 8px; flex-wrap: wrap; }
+  .dot::before { content: "●"; margin-right: 4px; color: var(--bad); }
+  .dot.ok::before { color: var(--ok); }
+
+  ol { margin: 0; padding: 0; list-style: none; }
+
+  ol li {
+    display: flex;
+    gap: 7px;
+    align-items: center;
+    padding: 7px 0;
+    border-top: 1px solid var(--line);
+  }
+
+  ol li:first-child { border-top: 0; }
+  .idx { color: var(--accent); font-weight: 700; min-width: 1.4em; font-variant-numeric: tabular-nums; }
+  .song { flex: 1; min-width: 0; }
+  .song .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .song .u { color: var(--sub); font-size: 11px; }
+  .badge { font-size: 10px; padding: 1px 6px; border-radius: 99px; background: var(--control); color: var(--sub); }
+  .badge.cut { background: var(--accent); color: #fff; font-weight: 600; }
+
+  .empty { color: var(--sub); padding: 6px 0; }
+
+  #log {
+    max-height: 150px;
+    overflow-y: auto;
+    font-size: 11px;
+    color: var(--sub);
+    font-family: Consolas, monospace;
+    scrollbar-width: thin;
+    scrollbar-color: #505563 transparent;
+  }
+
+  #log::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  #log::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  #log::-webkit-scrollbar-thumb {
+    background: #505563;
+    border-radius: 3px;
+  }
+
+  #log::-webkit-scrollbar-thumb:hover {
+    background: var(--accent);
+  }
+
+  #log div { padding: 1px 0; white-space: pre-wrap; word-break: break-all; }
+  #log .error { color: var(--bad); }
+  #log .ok { color: var(--ok); }
+
+  #toast {
+    position: fixed;
+    left: 7px;
+    right: 7px;
+    bottom: 7px;
+    background: var(--control);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    padding: 8px 10px;
+    opacity: 0;
+    transition: opacity .2s;
+    pointer-events: none;
+  }
+
+  #toast.show { opacity: 1; }
+  #toast.bad { border-color: var(--bad); color: var(--bad); }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <h2>当前播放</h2>
+  <div class="now">
+    <img id="np-cover" alt="" hidden>
+    <div class="grow">
+      <div class="name" id="np-name">—</div>
+      <div class="sub" id="np-artists"></div>
+    </div>
+  </div>
+  <div class="dots">
+    <span class="dot" id="dot-danmaku">弹幕</span>
+    <span class="dot" id="dot-backend">网易云后端</span>
+    <span class="dot ok" id="dot-mode">播放模式</span>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <button class="mini" data-jump="-1" aria-label="上一首" title="上一首"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m19 20-10-8 10-8v16Z"/><path d="M5 19V5"/></svg>上一首</button>
+    <button class="mini" data-jump="1" aria-label="下一首" title="下一首"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 4 10 8-10 8V4Z"/><path d="M19 5v14"/></svg>下一首</button>
+    <select id="mode">
+      <option value="playOrder">顺序播放</option>
+      <option value="playCycle">列表循环</option>
+      <option value="playRandom">随机播放</option>
+      <option value="playOneCycle">单曲循环</option>
+    </select>
+    <button class="mini" id="apply-mode">切换</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>手动加歌</h2>
+  <div class="row">
+    <input type="text" id="song" class="grow" placeholder="歌名 或 网易云歌曲ID" autocomplete="off">
+  </div>
+  <div class="row" style="margin-top:6px">
+    <input type="text" id="who" placeholder="点歌人（默认 主播）" style="width:9em">
+    <select id="strategy">
+      <option value="first">默认搜索</option>
+      <option value="classic">经典搜索</option>
+    </select>
+    <button id="add" class="primary">加到队尾</button>
+    <button id="add-cut">插队</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between">
+    <h2 style="margin:0">点歌池 <span id="count" style="color:var(--accent)"></span></h2>
+    <div class="row">
+      <button class="mini" id="toggle-accept">接收点歌</button>
+      <button class="mini danger" id="clear">清空</button>
+    </div>
+  </div>
+  <ol id="queue" style="margin-top:8px"></ol>
+  <div class="empty" id="queue-empty">点歌池是空的</div>
+</div>
+
+<div class="card">
+  <h2>最近动态</h2>
+  <div id="log"></div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  let latest = { queue: [], accepting: true };
+  let busy = false;
+
+  $("np-cover").onerror = () => {
+    $("np-cover").hidden = true;
+    $("np-cover").removeAttribute("src");
+  };
+
+  function toast(text, bad = false) {
+    const el = $("toast");
+    el.textContent = text;
+    el.classList.toggle("bad", bad);
+    el.classList.add("show");
+    clearTimeout(el.timer);
+    el.timer = setTimeout(() => el.classList.remove("show"), 2600);
+  }
+
+  async function call(path, options = {}) {
+    if (busy) return null;
+    busy = true;
+    document.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    try {
+      const response = await fetch(path, {
+        method: options.method || "POST",
+        headers: { "Content-Type": "application/json" },
+        body: options.body ? JSON.stringify(options.body) : undefined,
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) throw new Error(result.err || `HTTP ${response.status}`);
+      if (options.done) toast(options.done);
+      return result;
+    } catch (error) {
+      toast(error.message, true);
+      return null;
+    } finally {
+      busy = false;
+      document.querySelectorAll("button").forEach((b) => (b.disabled = false));
+    }
+  }
+
+  function addSong(priority) {
+    const value = $("song").value.trim();
+    if (!value) return toast("先填歌名或 ID", true);
+    call("/api/songs", {
+      body: { value, priority, user: $("who").value.trim(), strategy: $("strategy").value },
+      done: priority ? "已插队" : "已加入队尾",
+    }).then((result) => {
+      if (result) $("song").value = "";
+    });
+  }
+
+  $("add").onclick = () => addSong(false);
+  $("add-cut").onclick = () => addSong(true);
+  $("song").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") addSong(event.shiftKey);
+  });
+
+  $("clear").onclick = () => {
+    if (!latest.queue.length) return toast("已经是空的");
+    if (!confirm("清空点歌池？已插入网易云队列的歌也会一起删掉。")) return;
+    call("/api/songs/clear", { done: "已清空" });
+  };
+
+  $("toggle-accept").onclick = () => {
+    call("/api/accepting", { body: { accepting: !latest.accepting } });
+  };
+
+  $("apply-mode").onclick = () => {
+    call("/api/play-mode", { body: { mode: $("mode").value }, done: "已切换播放模式" });
+  };
+
+  document.querySelectorAll("[data-jump]").forEach((button) => {
+    button.onclick = () => call("/api/jump", {
+      body: { flag: Number(button.dataset.jump) },
+      done: button.dataset.jump === "1" ? "已切下一首" : "已切上一首",
+    });
+  });
+
+  function renderQueue(queue) {
+    $("count").textContent = queue.length ? `(${queue.length})` : "";
+    $("queue-empty").hidden = queue.length > 0;
+    $("queue").replaceChildren(...queue.map((item, index) => {
+      const li = document.createElement("li");
+
+      const idx = document.createElement("span");
+      idx.className = "idx";
+      idx.textContent = index + 1;
+
+      const song = document.createElement("div");
+      song.className = "song";
+      const title = document.createElement("div");
+      title.className = "t";
+      title.textContent = item.name;
+      const who = document.createElement("div");
+      who.className = "u";
+      who.textContent = item.user;
+      song.append(title, who);
+
+      li.append(idx, song);
+
+      if (item.priority) {
+        const badge = document.createElement("span");
+        badge.className = "badge cut";
+        badge.textContent = "插队";
+        li.append(badge);
+      }
+      if (item.state !== "queued") {
+        const badge = document.createElement("span");
+        badge.className = "badge";
+        badge.textContent = item.state === "processing" ? "搜索中" : "排队中";
+        li.append(badge);
+      }
+
+      if (item.songId) {
+        const jump = document.createElement("button");
+        jump.className = "mini";
+        jump.textContent = "▶";
+        jump.title = "立刻播放这首";
+        jump.onclick = () => call("/api/jump", { body: { songId: item.songId }, done: "已切到这首" });
+        li.append(jump);
+      }
+
+      const remove = document.createElement("button");
+      remove.className = "mini danger";
+      remove.textContent = "✕";
+      remove.title = "从点歌池和网易云队列里删掉";
+      remove.onclick = () => call(`/api/songs/${item.id}`, { method: "DELETE", done: "已删除" });
+      li.append(remove);
+
+      return li;
+    }));
+  }
+
+  function render(state) {
+    latest = state;
+    const current = state.nowPlaying;
+    $("np-name").textContent = current?.name || "—";
+    $("np-artists").textContent = (current?.artists || []).join(" / ");
+    const coverUrl = String(current?.coverUrl || "").trim();
+    if (coverUrl) {
+      $("np-cover").src = coverUrl;
+      $("np-cover").hidden = false;
+    } else {
+      $("np-cover").hidden = true;
+      $("np-cover").removeAttribute("src");
+    }
+
+    $("dot-danmaku").classList.toggle("ok", !!state.danmaku?.connected);
+    $("dot-danmaku").textContent = state.danmaku?.connected
+      ? (state.danmaku.mock ? "弹幕（模拟）" : "弹幕已连接")
+      : "弹幕未连接";
+    $("dot-backend").classList.toggle("ok", !!state.backend?.ok);
+    $("dot-backend").textContent = state.backend?.ok ? "后端正常" : "后端异常";
+
+    const modeNames = { playOrder: "顺序", playCycle: "列表循环", playRandom: "随机", playOneCycle: "单曲循环" };
+    const mode = current?.playingMode;
+    $("dot-mode").textContent = mode ? `模式：${modeNames[mode] || mode}` : "模式未知";
+    if (mode && document.activeElement !== $("mode")) $("mode").value = mode;
+
+    const accept = $("toggle-accept");
+    accept.classList.toggle("on", state.accepting);
+    accept.textContent = state.accepting ? "接收点歌" : "已暂停";
+
+    renderQueue(state.queue || []);
+
+    $("log").replaceChildren(...(state.log || []).slice().reverse().map((entry) => {
+      const div = document.createElement("div");
+      div.className = entry.level;
+      const time = new Date(entry.at).toLocaleTimeString("zh-CN", { hour12: false });
+      div.textContent = `${time}  ${entry.text}`;
+      return div;
+    }));
+  }
+
+  let source;
+  function connect() {
+    source = new EventSource("/api/events");
+    source.onmessage = (event) => render(JSON.parse(event.data));
+    source.onerror = () => {
+      source.close();
+      setTimeout(connect, 2000);
+    };
+  }
+  connect();
+</script>
+</body>
+</html>
